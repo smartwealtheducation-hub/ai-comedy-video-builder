@@ -127,16 +127,24 @@ def build_video_job(job_id, voice_audio_base64, footage_urls, title_text, channe
                      "-c", "copy", str(raw_video), "-y"])
 
             # Step 5: Build the text overlay filter (no hardcoded branding)
+            def escape_drawtext(text):
+                # Order matters: backslash first, then the rest
+                text = text.replace("\\", "\\\\\\\\")
+                text = text.replace(":", "\\:")
+                text = text.replace("'", "\u2019")  # swap apostrophes for a safe character
+                text = text.replace("%", "\\%")
+                return text
+
             filters = []
             if title_text:
-                safe_title = title_text[:50].replace("'", "\\'").replace(":", "\\:")
+                safe_title = escape_drawtext(title_text[:50].strip())
                 filters.append(
                     f"drawtext=text='{safe_title}':"
                     f"fontsize=42:fontcolor=white:bordercolor=black:borderw=3:"
                     f"x=(w-tw)/2:y=80:enable='between(t,0,3)'"
                 )
             if channel_tag:
-                safe_tag = channel_tag[:30].replace("'", "\\'").replace(":", "\\:")
+                safe_tag = escape_drawtext(channel_tag[:30].strip())
                 filters.append(
                     f"drawtext=text='{safe_tag}':"
                     f"fontsize=20:fontcolor=yellow:bordercolor=black:borderw=1:"
