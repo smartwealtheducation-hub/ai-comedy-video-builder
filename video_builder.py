@@ -26,7 +26,7 @@ job_status = {}
 def run_cmd(cmd):
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(result.stderr[-500:])
+        raise RuntimeError(result.stderr[-800:])
     return result
 
 
@@ -69,6 +69,14 @@ def download_footage(footage_urls, work_dir):
     return clips
 
 
+def escape_drawtext(text):
+    text = text.replace("\\", "\\\\\\\\")
+    text = text.replace(":", "\\:")
+    text = text.replace("'", "\u2019")
+    text = text.replace("%", "\\%")
+    return text
+
+
 def build_video_job(job_id, voice_audio_base64, footage_urls, title_text, channel_tag):
     try:
         job_status[job_id] = "running"
@@ -78,17 +86,14 @@ def build_video_job(job_id, voice_audio_base64, footage_urls, title_text, channe
             work = Path(tmp)
             voice = work / "voice.mp3"
 
-            # Step 1: Save the pre-generated voiceover
             log.info("Saving voiceover...")
             duration = save_voiceover(voice_audio_base64, voice)
             log.info("Voiceover saved: %.1fs", duration)
 
-            # Step 2: Download the pre-selected footage clips
             log.info("Downloading footage...")
             raw_clips = download_footage(footage_urls, work)
             log.info("Got %d clips", len(raw_clips))
 
-            # Step 3: Normalise clips to VERTICAL 720x1280 (9:16 Shorts format)
             norm = []
             for i, clip in enumerate(raw_clips):
                 out = work / f"norm_{i}.mp4"
@@ -104,7 +109,6 @@ def build_video_job(job_id, voice_audio_base64, footage_urls, title_text, channe
             if not norm:
                 raise RuntimeError("No clips normalised")
 
-            # Step 4: Loop clips to cover the voiceover's duration
             needed = duration + 2
             looped = []
             total = 0.0
@@ -126,40 +130,46 @@ def build_video_job(job_id, voice_audio_base64, footage_urls, title_text, channe
                      "-t", str(needed),
                      "-c", "copy", str(raw_video), "-y"])
 
-            # Step 5: Build the text overlay filter (no hardcoded branding)
-            def escape_drawtext(text):
-                # Order matters: backslash first, then the rest
-                text = text.replace("\\", "\\\\\\\\")
-                text = text.replace(":", "\\:")
-                text = text.replace("'", "\u2019")  # swap apostrophes for a safe character
-                text = text.replace("%", "\\%")
-                return text
+            total_dur = needed
+            punch_dur = min(3.5, total_dur * 0.4)
+            punch_dur = max(punch_dur, 1.5)
+            pre_dur = max(0.1, total_dur - punch_dur)
 
-            filters = []
+            safe_tag = escape_drawtext(channel_tag[:30].strip()) if channel_tag else ""
+            tag_filter = (
+                f"drawtext=text='{safe_tag}':fontsize=20:fontcolor=yellow:"
+                f"bordercolor=black:borderw=1:x=w-tw-15:y=h-th-15"
+                if safe_tag else "null"
+            )
+
+            title_filter = "null"
             if title_text:
                 safe_title = escape_drawtext(title_text[:50].strip())
-                filters.append(
-                    f"drawtext=text='{safe_title}':"
-                    f"fontsize=42:fontcolor=white:bordercolor=black:borderw=3:"
-                    f"x=(w-tw)/2:y=80:enable='between(t,0,3)'"
+                title_filter = (
+                    f"drawtext=text='{safe_title}':fontsize=42:fontcolor=white:"
+                    f"bordercolor=black:borderw=3:x=(w-tw)/2:y=80:enable='between(t,0,3)'"
                 )
-            if channel_tag:
-                safe_tag = escape_drawtext(channel_tag[:30].strip())
-                filters.append(
-                    f"drawtext=text='{safe_tag}':"
-                    f"fontsize=20:fontcolor=yellow:bordercolor=black:borderw=1:"
-                    f"x=w-tw-15:y=h-th-15"
-                )
-            vf = ",".join(filters) if filters else "null"
 
-            # Step 6: Final render — video + voiceover, vertical output
             safe_name = re.sub(r"[^a-zA-Z0-9_]", "_", (title_text or "comedy_video"))[:35]
             out_path = OUTPUT_DIR / f"{safe_name}_{job_id}.mp4"
+
+            filter_complex = (
+                f"[0:v]trim=0:{pre_dur:.2f},setpts=PTS-STARTPTS,"
+                f"{title_filter},{tag_filter}[pre];"
+
+                f"[0:v]trim={pre_dur:.2f}:{total_dur:.2f},setpts=PTS-STARTPTS,"
+                f"scale=iw*1.14:ih*1.14,"
+                f"crop=iw/1.14:ih/1.14:(iw-iw/1.14)/2:(ih-ih/1.14)/2,"
+                f"eq=brightness=0.25:enable='between(t,0,0.12)',"
+                f"{tag_filter}[punch];"
+
+                f"[pre][punch]concat=n=2:v=1:a=0[vout]"
+            )
 
             run_cmd(["ffmpeg",
                      "-i", str(raw_video),
                      "-i", str(voice),
-                     "-filter_complex", f"[0:v]{vf}[vout]",
+                     "-filter_complex", filter_complex,
                      "-map", "[vout]", "-map", "1:a",
                      "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
                      "-c:a", "aac", "-b:a", "128k",
