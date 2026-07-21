@@ -1,3 +1,8 @@
+bash
+
+cat /mnt/user-data/outputs/video_builder.py
+Output
+
 import os
 import re
 import json
@@ -155,11 +160,12 @@ def build_video_job(job_id, voice_audio_base64, footage_urls, title_text, channe
 
             filter_complex = (
                 f"[0:v]trim=0:{pre_dur:.2f},setpts=PTS-STARTPTS,"
+                f"scale=720:1280,"
                 f"{title_filter},{tag_filter}[pre];"
 
                 f"[0:v]trim={pre_dur:.2f}:{total_dur:.2f},setpts=PTS-STARTPTS,"
-                f"scale=iw*1.14:ih*1.14,"
-                f"crop=iw/1.14:ih/1.14:(iw-iw/1.14)/2:(ih-ih/1.14)/2,"
+                f"scale=822:1462,"
+                f"crop=720:1280:(822-720)/2:(1462-1280)/2,"
                 f"eq=brightness=0.25:enable='between(t,0,0.12)',"
                 f"{tag_filter}[punch];"
 
